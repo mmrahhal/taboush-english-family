@@ -1,19 +1,127 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // استبدل FIREBASE_PARENT_UID بمعرّف ولي الأمر من Authentication > Users.
-    // تُرفض جميع عمليات القراءة والكتابة حتى تقوم بالاستبدال والنشر.
-    match /families/{familyId} {
-      allow read, write: if request.auth != null
-        && request.auth.uid == "FIREBASE_PARENT_UID"
-        && familyId == request.auth.uid
-        && (request.method == 'get' || request.method == 'list' || request.resource == null || (
-          request.resource.data.keys().hasOnly(['version','db','life','updatedAt'])
-          && request.resource.data.version == 1
-          && request.resource.data.db is map
-          && request.resource.data.life is map
-        ));
+
+    function isParent() {
+      return request.auth != null
+        && request.auth.uid == 'PrVuRIqwqKUDy6z2P0HcjQA5DVu2';
     }
-    match /{document=**} { allow read, write: if false; }
+
+    function isStudent(studentId) {
+      return request.auth != null
+        && request.auth.uid == studentId;
+    }
+
+    function parentAccess(familyId) {
+      return isParent()
+        && familyId == request.auth.uid;
+    }
+
+    function linkedStudent(familyId, studentId) {
+      return isStudent(studentId)
+        && familyId == 'PrVuRIqwqKUDy6z2P0HcjQA5DVu2'
+        && exists(
+          /databases/$(database)/documents/studentLinks/$(studentId)
+        )
+        && get(
+          /databases/$(database)/documents/studentLinks/$(studentId)
+        ).data.parentUid == familyId;
+    }
+
+    function validProgress() {
+      let p = request.resource.data;
+
+      return p.keys().hasAll([
+          'xp', 'done', 'attempts', 'correct', 'history'
+        ])
+        && p.keys().hasOnly([
+          'xp', 'done', 'attempts', 'correct', 'history'
+        ])
+        && p.xp is int
+        && p.xp >= 0
+        && p.xp <= 1000000
+        && p.attempts is int
+        && p.attempts >= 0
+        && p.correct is int
+        && p.correct >= 0
+        && p.correct <= p.attempts
+        && p.done is map
+        && p.history is list
+        && p.history.size() <= 100;
+    }
+
+    match /studentLinks/{studentId} {
+      allow get: if isParent() || isStudent(studentId);
+      allow list: if false;
+
+      allow create: if isParent()
+        && request.resource.data.keys().hasOnly([
+          'parentUid', 'createdAt'
+        ])
+        && request.resource.data.parentUid == request.auth.uid;
+
+      allow update: if isParent()
+        && resource.data.parentUid == request.auth.uid
+        && request.resource.data.parentUid == resource.data.parentUid
+        && request.resource.data.diff(resource.data)
+            .affectedKeys().hasOnly(['createdAt']);
+
+      allow delete: if isParent()
+        && resource.data.parentUid == request.auth.uid;
+    }
+
+    match /families/{familyId} {
+      allow get, create, update, delete:
+        if parentAccess(familyId);
+
+      allow list: if false;
+
+      match /students/{studentId} {
+        allow get: if parentAccess(familyId)
+          || linkedStudent(familyId, studentId);
+
+        allow list: if parentAccess(familyId);
+
+        allow create, update, delete:
+          if parentAccess(familyId);
+
+        match /learning/{learningDoc} {
+          allow read: if parentAccess(familyId)
+            || linkedStudent(familyId, studentId);
+
+          allow create, update:
+            if parentAccess(familyId)
+            || (
+              linkedStudent(familyId, studentId)
+              && learningDoc == 'progress'
+              && validProgress()
+            );
+
+          allow delete: if parentAccess(familyId);
+        }
+
+        match /notes/{noteId} {
+          allow read: if parentAccess(familyId)
+            || linkedStudent(familyId, studentId);
+
+          allow create, update, delete:
+            if parentAccess(familyId);
+        }
+
+        match /rewards/{rewardId} {
+          allow read: if parentAccess(familyId)
+            || linkedStudent(familyId, studentId);
+
+          allow create, update, delete:
+            if parentAccess(familyId);
+        }
+      }
+    }
+
+    match /{other=**} {
+      allow read, write: if false;
+    }
   }
 }
+
